@@ -71,7 +71,8 @@ func (d *Discoverer) searchBLE(ctx context.Context, stop chan struct{}) ([]*Devi
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	seen := make(map[bluetooth.MAC]bool)
+	seen := make(map[string]bool)
+
 	approver := newApprover[*bluetooth.ScanResult](d, stop)
 	defer approver.done()
 	var devices []*Device
@@ -178,7 +179,7 @@ func (d *Discoverer) searchBLE(ctx context.Context, stop chan struct{}) ([]*Devi
 			Str("ble_address", sr.Address.String()).
 			Uints16("manufactures", manufacturers).
 			Str("ble_local_name", sr.LocalName()).Logger()
-		wasShelly, wasSeen := seen[sr.Address.MAC]
+		wasShelly, wasSeen := seen[sr.Address.String()]
 		if wasShelly {
 			// We've already seen this device with Shelly services. It may be approved, queued for
 			// approval, or rejected. Regardless, it's not interesting to us any longer. We only
@@ -189,18 +190,18 @@ func (d *Discoverer) searchBLE(ctx context.Context, stop chan struct{}) ([]*Devi
 			if !wasSeen {
 				// wasSeen ensures we don't log this device many times.
 				ll.Debug().Msg("found non-shelly device")
-				seen[sr.Address.MAC] = false
+				seen[sr.Address.String()] = false
 			}
 			return
 		}
 
 		// This might have already been added to the discoverer in past searched or via other methods.
-		if d.isKnownDevice(sr.Address.MAC.String()) {
+		if d.isKnownDevice(sr.Address.String()) {
 			return
 		}
 		approver.submit(ctx, &sr, fmt.Sprintf("BLE device %q (%s)", sr.LocalName(), sr.Address.String()))
 		// This is a shelly device and we're about to give it all of the consideration it deserves.
-		seen[sr.Address.MAC] = true
+		seen[sr.Address.String()] = true
 	})
 
 	return devices, err
