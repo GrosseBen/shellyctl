@@ -175,6 +175,45 @@ func discoveryFlags(f *pflag.FlagSet, opts discoveryFlagsOptions) {
 
 }
 
+// configureMQTTTLS konfiguriert die TLS-Optionen für die MQTT-Verbindung.
+// Gibt einen *tls.Config oder einen Fehler zurück.
+func configureMQTTTLS() (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: viper.GetBool("mqtt-tls-insecure"),
+	}
+
+	// Prüfe, ob ein CA-Zertifikat angegeben wurde
+	if !viper.IsSet("mqtt-tls-ca-cert") {
+		return tlsConfig, nil
+	}
+
+	// Lese die CA-Zertifikatsdatei
+	certs, err := os.ReadFile(viper.GetString("mqtt-tls-ca-cert"))
+	if err != nil {
+		return nil, fmt.Errorf("reading `mqtt-tls-ca-cert`: %w", err)
+	}
+
+	// Erstelle einen neuen CertPool und füge die Zertifikate hinzu
+	tlsConfig.RootCAs = x509.NewCertPool()
+	if !tlsConfig.RootCAs.AppendCertsFromPEM(certs) {
+		return nil, fmt.Errorf("failed to parse `mqtt-tls-ca-cert` as PEM cert bundle")
+	}
+	return tlsConfig, nil
+}
+
+func validateMQTTTLS() error {
+	caCertPath := viper.GetString("mqtt-tls-ca-cert")
+	if caCertPath == "" {
+		return nil
+	}
+
+	_, err := os.Stat(caCertPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("mqtt-tls-ca-cert file does not exist: %w", err)
+	}
+	return err // Falls ein anderer Fehler auftritt (z. B. Berechtigungsproblem)
+}
+
 func discoveryOptionsFromFlags(flags *pflag.FlagSet) (opts []discovery.DiscovererOption, err error) {
 	viper.BindPFlags(flags)
 	// hosts := viper.GetStringSlice("host")
@@ -271,29 +310,25 @@ func discoveryOptionsFromFlags(flags *pflag.FlagSet) (opts []discovery.Discovere
 		if viper.IsSet("mqtt-password") {
 			mqttConnectOptions.Password = viper.GetString("mqtt-password")
 		}
-		if viper.IsSet("mqtt-tls-ca-cert") || viper.GetBool("mqtt-tls-insecure") {
-			mqttConnectOptions.TLSConfig = &tls.Config{
-				InsecureSkipVerify: viper.GetBool("mqtt-tls-insecure"),
-			}
-			if viper.IsSet("mqtt-tls-ca-cert") {
-				mqttConnectOptions.TLSConfig.RootCAs = x509.NewCertPool()
-				certs, err := os.ReadFile(viper.GetString("mqtt-tls-ca-cert"))
-				if err != nil {
-					return nil, fmt.Errorf("reading `mqtt-tls-ca-cert`: %w", err)
-				}
-				if ok := mqttConnectOptions.TLSConfig.RootCAs.AppendCertsFromPEM(certs); !ok {
-					return nil, fmt.Errorf("failed to parse `mqtt-tls-ca-cert` as PEM cert bundle")
-				}
-			}
+
+		if err := validateMQTTTLS(); err != nil {
+			return nil, err
 		}
+
+		if viper.IsSet("mqtt-tls-ca-cert") || viper.GetBool("mqtt-tls-insecure") {
+			tlsConfig, err := configureMQTTTLS()
+			if err != nil {
+				return nil, err
+			}
+			mqttConnectOptions.TLSConfig = tlsConfig
+		}
+
 		if viper.IsSet("mqtt-client-id") {
 			mqttConnectOptions.ClientID = viper.GetString("mqtt-client-id")
 		} else {
 			mqttConnectOptions.ClientID = fmt.Sprintf("shellyctl-%d", rand.Uint32())
 		}
-		if topics := viper.GetStringSlice("mqtt-topic"); len(topics) > 0 {
-			opts = append(opts)
-		}
+
 		mqttConnectOptions.Servers = append(mqttConnectOptions.Servers, u)
 		mqttConnectOptions.KeepAlive = 10
 		opts = append(opts,
